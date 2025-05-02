@@ -1,0 +1,113 @@
+openapi: 3.0.1
+info:
+  title: Reservations
+  description: |-
+    Service to create, retrieve, search, update, or cancel a reservation.
+    
+    Endpoints:   
+    - /brands/{brand}/reservations - Create a reservation or retrieve a list of summarized reservations (search)
+  version: '%%project.version%%'
+tags:
+  - name: reservations-controller
+    description: Reservations management for corporate user or authenticated non-loyalty customer
+
+paths:
+  '/brands/{brand}/reservations':
+    post:
+      x-api-include:
+        hz-imperva-public:
+          x-cluster-route: pci
+        hz-system: {}
+        hz-corporate:
+          security:
+          - corporateEndpointRole: []
+        hz-public:
+          security:
+          - publicOpen: []
+      tags:
+        - reservations-controller
+      summary: 'Create a new reservation'
+      description: 'Create a new reservation'
+      operationId: CreateReservation
+      parameters:
+        - name: Client-Id
+          in: header
+          schema:
+            $ref: 'Dictionary#/definitions/client_id'
+        - name: country-code
+          in: header
+          schema:
+            $ref: 'Dictionary#/definitions/country_code'
+          required: true
+        - name: Accept-Language
+          in: header
+          schema:
+            $ref: 'Dictionary#/definitions/language'
+          required: true
+        - name: currency
+          in: header
+          schema:
+            $ref: 'Dictionary#/definitions/currency'
+        - name: Client-Language
+          in: header
+          schema:
+            $ref: 'Dictionary#/definitions/language'
+        - name: Content-Language
+          in: header
+          description: 'Content Language'
+          schema:
+            $ref: 'Dictionary#/definitions/language'
+        - name: brand
+          in: path
+          required: true
+          description: 'The brand the reservation belongs to.'
+          schema:
+            $ref: 'Enumerations#/components/schemas/Brand'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: 'Models#/components/schemas/ReservationRequest'
+              $refLocalize: true
+            examples:
+              example-resrequest-1:
+                $ref: 'example-resrequest-1.json'
+              example-resrequest-2-DT:
+                $ref: 'example-resrequest-2-DT.json'
+      responses:
+        '201':
+          description: Create reservation and get reservation_id in location header
+          headers:
+            Correlation-Id:
+              schema:
+                $ref: 'Dictionary#/definitions/client_id'
+            Location:
+              schema:
+                $ref: 'Dictionary#/definitions/error_code'
+              description: Returned on successful creation of a new resource. A link to the newly-created resouce will be contained in the 'Location' header.
+          content:
+            application/json:
+              schema:
+                $ref: 'Models#/components/schemas/Reservation'
+                $refLocalize: true
+              examples:
+                example-reservation-1:
+                  $ref: 'example-reservation-1.json'
+                example-reservation-2-DT:
+                  $ref: 'example-reservation-2-DT.json'
+        '400':
+          description: 'Bad request: Invalid request parameter'
+          headers:
+            Correlation-Id:
+              schema:
+                $ref: 'Dictionary#/definitions/client_id'
+          content:
+            application/json:
+              schema:
+                $ref: 'Models#/components/schemas/MicroserviceError'
+components:
+  securitySchemes:
+    bearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT

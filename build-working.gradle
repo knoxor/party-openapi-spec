@@ -1,0 +1,175 @@
+buildscript {
+    repositories {
+        mavenCentral()
+    }
+    dependencies {
+        classpath 'org.yaml:snakeyaml:2.2'
+    }
+}
+
+plugins {
+    id 'java'
+}
+
+repositories {
+    mavenLocal()
+    mavenCentral()
+}
+
+group = 'com.yourcompany.api'
+version = '1.0.0-SNAPSHOT'
+
+configurations {
+    specComponents {
+        canBeResolved = true
+        canBeConsumed = false
+        extendsFrom implementation
+    }
+}
+
+dependencies {
+    implementation 'com.yourcompany.openapi:enterprise-spec-components:1.0.0-SNAPSHOT'
+}
+
+task unpackSpecComponents(type: Copy) {
+    def jarFile = configurations.specComponents.find {
+        it.name.contains("enterprise-spec-components")
+    }
+    from zipTree(jarFile)
+    into "$buildDir/spec-components"
+}
+
+task preprocessOpenApi(type: DefaultTask) {
+    dependsOn unpackSpecComponents
+
+    inputs.file file("src/main/openapi/openapi.yaml")
+    outputs.file file("$buildDir/openapi.yaml")
+
+    doLast {
+        def aliasMap = [
+            'Models': "$buildDir/spec-components/spec/Models.yaml",
+            'Dictionary': "$buildDir/spec-components/spec/Dictionary.yaml",
+            'Enumerations': "$buildDir/spec-components/spec/Enumerations.yaml",
+        ]
+
+        def inputFile = file("src/main/openapi/openapi.yaml")
+        def outputFile = file("$buildDir/openapi.yaml")
+        def content = inputFile.text
+
+        aliasMap.each { alias, filePath ->
+            // Use Java-style string and escaping to prevent Groovy interpolation
+            String pattern = '\\$ref:\\s*[\'"]' + alias + '#(.*?)[\'"]'
+            String replacement = '\\$ref: ' + "'" + filePath + '#$1' + "'"
+
+            content = content.replaceAll(pattern, replacement)
+        }
+
+        outputFile.text = content
+        println "✅ Preprocessed OpenAPI written to: $outputFile"
+    }
+}
+
+import org.yaml.snakeyaml.Yaml
+import org.yaml.snakeyaml.DumperOptions
+
+task flattenOpenApiGroovy {
+    dependsOn unpackSpecComponents
+
+
+    doLast {
+        def inputFile = file("src/main/openapi/openapi.yaml")
+        def outputFile = file("$buildDir/openapi.yaml")
+        def modelsFile = file("$buildDir/spec-components/spec/Models.yaml")
+        def dictFile = file("$buildDir/spec-components/spec/Dictionary.yaml")
+        def enumFile = file("$buildDir/spec-components/spec/Enumerations.yaml")
+
+
+        def yaml = new Yaml()
+        def openapi = yaml.load(inputFile.text)
+        def models = yaml.load(modelsFile.text)
+        def dictionary = yaml.load(dictFile.text)
+        def enumerations = yaml.load(enumFile.text)
+
+        def usedSchemas = [:] // schemas to inject at the bottom
+
+        def replaceRefs
+        replaceRefs = { node ->
+            if (node instanceof Map) {
+                def keysToRemove = []
+                def newEntries = [:]
+
+                node.each { k, v ->
+                    if (k == "\$ref" && v instanceof String) {
+                        def matcherSchemas = v =~ /@?(Models|Dictionary|Enumerations)#\/components\/schemas\/(\w+)/
+                        def matcherDefinitions = v =~ /@?Dictionary#\/definitions\/(\w+)/
+
+                        if (matcherSchemas.matches()) {
+                            def alias = matcherSchemas[0][1]
+                            def name = matcherSchemas[0][2]
+
+                            def schema = null
+                            if (alias == 'Models') {
+                                schema = models.components?.schemas?.get(name)
+                            } else if (alias == 'Dictionary') {
+                                schema = dictionary.components?.schemas?.get(name)
+                            } else if (alias == 'Enumerations') {
+                                schema = enumerations.components?.schemas?.get(name)
+                            }
+
+                            if (schema) {
+                                usedSchemas[name] = schema
+                                newEntries["\$ref"] = "#/components/schemas/${name}".toString()
+                                keysToRemove << "\$ref"
+                            } else {
+                                println "⚠️ Schema ${name} not found in ${alias}.yaml"
+                            }
+
+                        } else if (matcherDefinitions.matches()) {
+                            def name = matcherDefinitions[0][1]
+                            def defn = dictionary.definitions?.get(name)
+
+                            if (defn) {
+                                keysToRemove << "\$ref"
+                                defn.each { key, value ->
+                                    newEntries[key.toString()] = value
+                                }
+                            } else {
+                                println "⚠️ Definition '${name}' not found in Dictionary.yaml"
+                            }
+                        }
+                    } else {
+                        replaceRefs(v)
+                    }
+                }
+
+                keysToRemove.each { node.remove(it) }
+                newEntries.each { k, v -> node[k] = v }
+
+            } else if (node instanceof List) {
+                node.each { replaceRefs(it) }
+            }
+        }
+
+
+        replaceRefs(openapi)
+
+        openapi.components = openapi.components ?: [:]
+        openapi.components.schemas = openapi.components.schemas ?: [:]
+        openapi.components.schemas.putAll(usedSchemas)
+
+        // ✅ Recursively flatten any remaining $ref in the inlined schemas
+        def schemasToFlatten = usedSchemas.values().collect()
+        schemasToFlatten.each { replaceRefs(it) }
+
+        def options = new DumperOptions()
+        options.setPrettyFlow(true)
+        options.setDefaultFlowStyle(DumperOptions.FlowStyle.BLOCK)
+        def outYaml = new Yaml(options)
+
+        outputFile.text = outYaml.dump(openapi)
+
+        println "✅ Flattened OpenAPI written to $outputFile with ${usedSchemas.size()} schemas inlined."
+    }
+}
+
+build.dependsOn flattenOpenApiGroovy

@@ -1,0 +1,59 @@
+buildscript {
+    repositories {
+        mavenLocal()
+        mavenCentral()
+    }
+    dependencies {
+        classpath "com.yourorg.openapi:openapi-flattener-plugin:1.0.0-SNAPSHOT"
+    }
+}
+
+apply plugin: 'java' // Required to define configurations
+apply plugin: 'com.yourorg.openapi-flattener'
+
+repositories {
+    mavenLocal()
+    mavenCentral()
+}
+
+configurations {
+    yamlFiles {
+        canBeResolved = true
+        canBeConsumed = false
+    }
+}
+
+
+dependencies {
+    yamlFiles 'com.yourcompany.openapi:enterprise-spec-components:1.0.0-SNAPSHOT'
+}
+
+task extractYamlFiles(type: Copy) {
+    doFirst {
+        println "Expanding JARs from:"
+        configurations.yamlFiles.each { println " → ${it}" }
+    }
+
+    from {
+        configurations.yamlFiles
+            .filter { it.name.endsWith('.jar') }
+            .collect { zipTree(it) }
+    }
+    include 'spec/Models.yaml', 'spec/Dictionary.yaml', 'spec/Enumerations.yaml'
+    into "$buildDir/extracted-yamls"
+    includeEmptyDirs = false
+    eachFile { f -> f.relativePath = f.relativePath.segments[-1] }
+}
+
+
+openapiFlatten {
+    inputSpec = file("src/main/openapi/openapi.yaml")
+    outputSpec = file("$buildDir/openapi.yaml")
+    aliases = [
+        Models      : "$buildDir/extracted-yamls/Models.yaml",
+        Dictionary  : "$buildDir/extracted-yamls/Dictionary.yaml",
+        Enumerations: "$buildDir/extracted-yamls/Enumerations.yaml"
+    ]
+}
+
+flattenOpenApiSpec.dependsOn extractYamlFiles
